@@ -16,6 +16,8 @@ contract FlightSuretyApp {
     /*                                       DATA VARIABLES                                     */
     /********************************************************************************************/
 
+    FlightSuretyData flightSuretyData;
+
     // Flight status codees
     uint8 private constant STATUS_CODE_UNKNOWN = 0;
     uint8 private constant STATUS_CODE_ON_TIME = 10;
@@ -33,6 +35,11 @@ contract FlightSuretyApp {
         address airline;
     }
     mapping(bytes32 => Flight) private flights;
+
+    
+    address[] airlineList = new address[](0);
+    address[] multiCalls = new address[](0);
+    address[] operationalMultiCalls = new address[](0);
 
  
     /********************************************************************************************/
@@ -73,10 +80,12 @@ contract FlightSuretyApp {
     */
     constructor
                                 (
+                                    address dataContract
                                 )
                                 public
     {
         contractOwner = msg.sender;
+        flightSuretyData = FlightSuretyData(dataContract);
     }
 
     /********************************************************************************************/
@@ -85,15 +94,46 @@ contract FlightSuretyApp {
 
     function isOperational()
                             public
-                            pure
                             returns(bool)
     {
-        return true;  // Modify to call data contract's status
+        return flightSuretyData.isOperational();  // Modify to call data contract's status
     }
+
+    
 
     /********************************************************************************************/
     /*                                     SMART CONTRACT FUNCTIONS                             */
     /********************************************************************************************/
+
+     /**
+    * @dev Sets contract operations on/off
+    *
+    * When operational mode is disabled, all write transactions except for this one will fail
+    */
+    function setOperatingStatus
+                            (
+                                bool mode
+                            )
+                            external
+    {
+        require(mode != operational, "New mode must be different from existing mode");
+        require(userProfiles[msg.sender].isAdmin, "Caller is not an admin");
+
+        bool isDuplicate = false;
+        for(uint c = 0; c < operationalMultiCalls.length; c++) {
+            if (operationalMultiCalls[c] == msg.sender) {
+                isDuplicate = true;
+                break;
+            }
+        }
+        require(!isDuplicate, "Caller has already called this function.");
+
+        operationalMultiCalls.push(msg.sender);
+        if (operationalMultiCalls.length >= M) {
+            flightSuretyData.setOperatingStatus(mode);
+            operationalMultiCalls = new address[](0);
+        }
+    }
 
   
    /**
@@ -102,14 +142,48 @@ contract FlightSuretyApp {
     */
     function registerAirline
                             (
+                                address account
                             )
                             external
-                            pure
-                            returns(bool success, uint256 votes)
+                            returns(bool)
     {
-        return (success, 0);
+        if (airlineList.length <= 4) {
+            // must be contract owner
+            require(msg.sender == contractOwner, "Caller is not contract owner");
+            // only existing airlines may register a new arline
+            
+            airlineList.push(account);
+            flightSuretyData.registerAirline(account);
+            return true;
+        } else {
+            // check if duplicate and if airline is registered
+            bool isDuplicate = false;
+            for (uint c = 0; c < multiCalls.length; c++) {
+                if(multiCalls[c] == msg.sender) {
+                    isDuplicate = true;
+                    break;
+                }
+            }
+            require(!isDuplicate, "Caller has already called this function");
+            // check if half of registered airlines approves
+            multiCalls.push(msg.sender);
+            if(multiCalls.length >= uint256(airlineList.length).div(2)) {
+                multiCalls = new address[](0);
+                airlineList.push(account);
+                flightSuretyData.registerAirline(account);
+            }
+            return true;
+        }
     }
 
+    function fund() public payable {
+        require(msg.sender == tx.origin, "Contracts not allowed");
+        uint256 fee = 10 ether;
+        require(msg.value >= fee, "Insufficient funds. Must have 10 Eth");
+
+        msg.value.sub(fee);
+        flightSuretyData.fund();
+    }
 
    /**
     * @dev Register a future flight for insuring.
@@ -139,6 +213,7 @@ contract FlightSuretyApp {
                                 pure
     {
     }
+
 
 
     // Generate a request for oracles to fetch flight information
@@ -237,7 +312,9 @@ contract FlightSuretyApp {
         return oracles[msg.sender].indexes;
     }
 
+    function creditInsurees() external {
 
+    }
 
 
     // Called by oracle when a response is available to an outstanding request
@@ -340,4 +417,11 @@ contract FlightSuretyApp {
 
 // endregion
 
-}   
+}
+
+contract FlightSuretyData {
+    function registerAirline(address account) external returns(bool);
+    function isOperational() external returns(bool);
+    function fund() public payable;
+    function setOperatingStatus(bool mode) external;
+}
